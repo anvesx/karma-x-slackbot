@@ -1,0 +1,15 @@
+karma.example.com {
+    @commands path /slack/commands
+    handle @commands {
+        request_body {
+            max_size 16KB
+        }
+        reverse_proxy 127.0.0.1:8790
+    }
+    handle /health {
+        reverse_proxy 127.0.0.1:8790
+    }
+    handle {
+        respond "Not found" 404
+    }
+}

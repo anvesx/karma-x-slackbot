@@ -1,0 +1,16 @@
+.venv/
+.env
+.env.*
+!.env.example
+*.db
+*.db-*
+data/
+work/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+*.egg-info/
+.codebase-memory/

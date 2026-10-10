@@ -1,0 +1,70 @@
+name: CI and deploy
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: astral-sh/setup-uv@d0d8abe699bfb85fec6de9f7adb5ae17292296ff # v6
+        with:
+          version: "0.8.4"
+          python-version: "3.12"
+      - run: uv sync --frozen
+      - run: make check
+      - run: bash -n deploy/deploy.sh
+      - run: shellcheck deploy/deploy.sh
+      - run: docker build -t karma-x:check .
+      - run: uv run --frozen python scripts/smoke_container.py karma-x:check
+
+  deploy:
+    needs: check
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && vars.DEPLOY_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: production
+    concurrency:
+      group: karma-x-production
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOY_SERVICE_ACCOUNT }}
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3
+      - name: Build, push, and deploy an immutable image
+        env:
+          GCP_PROJECT: ${{ vars.GCP_PROJECT }}
+          GCP_REGION: ${{ vars.GCP_REGION }}
+          GCP_ZONE: ${{ vars.GCP_ZONE }}
+          GCP_REGISTRY: ${{ vars.GCP_REGISTRY }}
+          GCP_VM: ${{ vars.GCP_VM }}
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          for field in GCP_PROJECT GCP_REGION GCP_ZONE GCP_REGISTRY GCP_VM; do
+            value="${!field}"
+            [[ "$value" =~ ^[a-z][a-z0-9-]{0,62}$ ]] || { echo "Invalid $field" >&2; exit 1; }
+          done
+          registry="${GCP_REGION}-docker.pkg.dev"
+          image="$registry/$GCP_PROJECT/$GCP_REGISTRY/karma-x"
+          gcloud auth configure-docker "$registry" --quiet
+          docker build --label "org.opencontainers.image.revision=$COMMIT_SHA" -t "$image:$COMMIT_SHA" .
+          docker push "$image:$COMMIT_SHA"
+          digest="$(docker inspect --format='{{index .RepoDigests 0}}' "$image:$COMMIT_SHA")"
+          [[ "$digest" == "$image"@sha256:* ]] || { echo 'Missing immutable digest' >&2; exit 1; }
+          gcloud compute ssh "$GCP_VM" --project "$GCP_PROJECT" --zone "$GCP_ZONE" \
+            --tunnel-through-iap --quiet \
+            --command="sudo /usr/local/sbin/karma-x-deploy '$digest'"

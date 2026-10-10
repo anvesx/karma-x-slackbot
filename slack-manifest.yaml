@@ -1,0 +1,31 @@
+display_information:
+  name: karma-x
+  description: One recognition, one karma, entirely in Slack.
+  background_color: "#17212b"
+features:
+  bot_user:
+    display_name: karma-x
+    always_online: false
+  slash_commands:
+    - command: /karma-x
+      url: https://REPLACE_WITH_YOUR_HOST/slack/commands
+      description: Recognize a teammate and view karma.
+      usage_hint: "@person ++ reason | list-all | recognition view"
+      should_escape: true
+oauth_config:
+  scopes:
+    bot:
+      - commands
+      - chat:write
+      - users:read
+      - channels:read
+      - groups:read
+      - channels:history
+      - groups:history
+    user:
+      - users.profile:read
+      - users.profile:write
+settings:
+  org_deploy_enabled: false
+  socket_mode_enabled: false
+  token_rotation_enabled: false
