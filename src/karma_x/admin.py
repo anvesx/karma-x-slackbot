@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 
 from karma_x.config import Config
-from karma_x.core import UserError, parse_command
+from karma_x.core import UserError, parse_command, post_text
 from karma_x.slack import Slack, SlackFailure
 from karma_x.store import Store
 
@@ -46,7 +46,20 @@ def main(argv: list[str] | None = None) -> None:
                     )
                 }
                 integrity = db.execute("PRAGMA quick_check").fetchone()[0]
-            print(json.dumps({"integrity": integrity, **counts}, sort_keys=True))
+                # Channel posts no longer show IDs, so list the ones attach-post may need.
+                uncertain_posts = [
+                    r[0]
+                    for r in db.execute(
+                        "SELECT recognition_id FROM effects WHERE kind='post' AND state='uncertain' "
+                        "ORDER BY recognition_id"
+                    )
+                ]
+            print(
+                json.dumps(
+                    {"integrity": integrity, **counts, "uncertain_posts": uncertain_posts},
+                    sort_keys=True,
+                )
+            )
             return
         config = Config.from_env()
         if not config.database.is_file():
@@ -73,14 +86,14 @@ def main(argv: list[str] | None = None) -> None:
             raise UserError("Message not found at that exact timestamp.")
         message = messages[0]
         text = message.get("text")
-        # The bot appends this immutable final line AFTER the user-controlled reason.
-        # Metadata can be stripped by Slack; a substring in the reason is not identity.
-        if (
-            message.get("user") != bot_user
-            or not isinstance(text, str)
-            or not text.splitlines()
-            or text.splitlines()[-1] != f"Recognition ID: {r['id']}"
-        ):
+        # Match the whole text the bot would have posted for this record, not a substring:
+        # the reason is user-controlled. Posts made before IDs were hidden end with an ID line.
+        # Metadata can be stripped by Slack, so it is not used as identity.
+        expected = post_text(r["sender"], r["recipient"], r["reason"])
+        if message.get("user") != bot_user or text not in {
+            expected,
+            f"{expected}\nRecognition ID: {r['id']}",
+        }:
             raise UserError("Message is not this bot's matching recognition.")
         link = slack.permalink(r["channel"], args.timestamp)
         store.attach_post(r["id"], args.timestamp, link)

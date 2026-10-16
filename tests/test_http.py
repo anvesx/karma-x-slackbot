@@ -1,6 +1,7 @@
 import hashlib
 import hmac
 import time
+from dataclasses import replace
 from urllib.parse import urlencode
 
 import pytest
@@ -43,7 +44,8 @@ def test_signed_http_to_worker_to_slack(rig):
         s.clock = lambda: __import__("datetime").datetime.now(__import__("datetime").UTC)
         assert s.tick()
         assert slack.names["U2"] == "Person 2 🌟1"
-        assert slack.posts[0][1].endswith(s.store.history("T1", "U1")[0]["id"])
+        rid = s.store.history("T1", "U1")[0]["id"]
+        assert rid not in slack.posts[0][1] and rid in slack.replies[0]["text"]
         client.post("/slack/commands", content=data, headers=headers)
         assert s.tick() is False
         assert s.store.total("T1", "U2") == 1
@@ -107,3 +109,28 @@ def test_duplicate_form_keys_rejected(rig):
             s.config.signing_secret, list(payload().items()) + [("user_id", "U2")]
         )
         assert client.post("/slack/commands", content=data, headers=headers).status_code == 400
+
+
+def test_wildcard_allows_any_channel_in_workspace(rig):
+    s, _ = rig
+    s.config = replace(s.config, channel_ids=frozenset({"*"}))
+    p = payload()
+    p["channel_id"] = "C9"
+    with TestClient(create_app(s.config, s, False)) as client:
+        data, headers = signed(s.config.signing_secret, p)
+        assert client.post("/slack/commands", content=data, headers=headers).status_code == 200
+    assert s.store.claim(10**18) is not None
+
+
+def test_wildcard_still_rejects_foreign_workspace(rig):
+    s, _ = rig
+    s.config = replace(s.config, channel_ids=frozenset({"*"}))
+    p = payload()
+    p["team_id"] = "T2"
+    with TestClient(create_app(s.config, s, False)) as client:
+        data, headers = signed(s.config.signing_secret, p)
+        assert (
+            "not enabled"
+            in client.post("/slack/commands", content=data, headers=headers).json()["text"]
+        )
+    assert s.store.claim(10**18) is None

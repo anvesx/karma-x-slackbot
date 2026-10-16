@@ -8,11 +8,35 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from karma_x.config import Config
-from karma_x.core import Command, UserError, date_window, escaped, parse_command, utc_us
+from karma_x.core import (
+    Command,
+    UserError,
+    canceled_post_text,
+    date_window,
+    escaped,
+    parse_command,
+    post_text,
+    utc_us,
+)
 from karma_x.slack import Slack, SlackFailure
 from karma_x.store import Store
 
 log = logging.getLogger(__name__)
+
+DELIVERY_SUBJECTS = {
+    "post": "the channel post",
+    "update": "the canceled-post update",
+    "profile": "the display-name update",
+}
+
+
+def delivery_problem(kind: str, state: str, error: str | None) -> str:
+    subject = DELIVERY_SUBJECTS.get(kind, kind)
+    if state == "uncertain":
+        return f"{subject} may not have gone through; an operator will check it"
+    if state in {"blocked", "failed"}:
+        return f"{subject} is {state} ({error or 'unknown error'})"
+    return f"{subject} is still on its way"
 
 
 class Service:
@@ -43,7 +67,7 @@ class Service:
         self.access_cache.clear()
         p = task["payload"]
         team, user, channel = p["team_id"], p["user_id"], p["channel_id"]
-        if team != self.config.team_id or channel not in self.config.channel_ids:
+        if team != self.config.team_id or not self.config.allows_channel(channel):
             raise UserError("This workspace or channel is not enabled for karma-x.")
         self.member(user)
         if not self.access(user, channel):
@@ -59,18 +83,22 @@ class Service:
                 raise UserError("The recipient must be a member of this recognition channel.")
             r = self.store.give(task["id"], team, user, c.target, channel, c.reason, created)
             self.effects()
-            return {
-                "text": f"Recognition {r['id']} saved. <@{c.target}> has 🌟{self.store.total(team, c.target)}. {self.delivery_note(r['id'])}"
-            }
+            # Only the giver sees this reply, so it is the one place the ID appears.
+            saved = (
+                f"Saved! <@{c.target}> now has 🌟{self.store.total(team, c.target)}. "
+                f"To undo: /karma-x recognition cancel {r['id']}"
+            )
+            return {"text": " ".join(filter(None, [saved, self.delivery_note(r["id"])]))}
         if c.action == "cancel":
             r = self.store.get(team, c.target)
             if not self.access(user, r["channel"]):
                 raise UserError("You cannot access this recognition channel.")
             r = self.store.cancel(team, c.target, user, utc_us(now))
             self.effects()
-            return {
-                "text": f"Recognition {r['id']} canceled. <@{r['recipient']}> has 🌟{self.store.total(team, r['recipient'])}. {self.delivery_note(r['id'])}"
-            }
+            canceled = (
+                f"Canceled. <@{r['recipient']}> now has 🌟{self.store.total(team, r['recipient'])}."
+            )
+            return {"text": " ".join(filter(None, [canceled, self.delivery_note(r["id"])]))}
         if c.action == "list":
             return self.leaderboard(user)
         if c.action == "winner":
@@ -89,7 +117,8 @@ class Service:
         }
 
     def recognition_text(self, r: dict[str, Any], now: datetime, brief: bool = False) -> str:
-        stamp = datetime.fromtimestamp(r["created_at_us"] / 1_000_000, UTC).isoformat()
+        created = datetime.fromtimestamp(r["created_at_us"] / 1_000_000, UTC)
+        stamp = created.astimezone(ZoneInfo(self.config.timezone)).strftime("%d %b %Y, %H:%M %Z")
         state = "Canceled" if r["canceled_at_us"] is not None else "Active"
         link = f" <{r['permalink']}|Recognition thread>" if r["permalink"] else " (thread pending)"
         reason = r["reason"]
@@ -103,7 +132,9 @@ class Service:
                 "SELECT kind,state,error FROM effects WHERE recognition_id=? AND state!='done'",
                 (rid,),
             ).fetchall()
-        return " ".join(f"{r['kind']}: {r['state']} ({r['error'] or 'waiting'})." for r in rows)
+        return " ".join(
+            f"Note: {delivery_problem(r['kind'], r['state'], r['error'])}." for r in rows
+        )
 
     def leaderboard(self, user: str) -> dict[str, Any]:
         rows = self.store.top(self.config.team_id)
@@ -190,7 +221,7 @@ class Service:
                         continue
                     if not r["message_ts"]:
                         self.store.effect_state(eid, "sending", now)
-                        text = f"<@{r['sender']}> recognized <@{r['recipient']}> · 🌟 +1\n{escaped(r['reason'])}\nRecognition ID: {r['id']}"
+                        text = post_text(r["sender"], r["recipient"], r["reason"])
                         ts = self.slack.post(r["channel"], text, r["id"])
                         self.store.record_message(r["id"], ts)
                     else:
@@ -201,7 +232,7 @@ class Service:
                         self.slack.update(
                             r["channel"],
                             r["message_ts"],
-                            f"Canceled recognition {r['id']} · <@{r['sender']}> → <@{r['recipient']}>\n{escaped(r['reason'])}",
+                            canceled_post_text(r["sender"], r["recipient"], r["reason"]),
                         )
                 elif kind == "profile":
                     uid = r["recipient"]

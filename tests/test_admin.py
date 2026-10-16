@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from karma_x import admin
@@ -48,7 +50,7 @@ def test_operator_can_attach_only_matching_bot_post_and_then_update_canceled(rig
     message = {
         "user": "UIMPOSTER",
         "ts": "12345.000001",
-        "text": f"Recognition ID: {r['id']}",
+        "text": "<@U1> recognized <@U2> · 🌟 +1\nx",
     }
     monkeypatch.setattr(
         slack,
@@ -89,3 +91,31 @@ def test_user_controlled_reason_cannot_spoof_post_reconciliation(rig, monkeypatc
         admin.main(["attach-post", victim["id"], message["ts"]])
     assert error.value.code == 2
     assert store.get("T1", victim["id"])["message_ts"] is None
+
+
+def test_attach_accepts_posts_made_before_ids_were_hidden(rig, monkeypatch):
+    service, slack = rig
+    store = service.store
+    r = store.give("legacy", "T1", "U1", "U2", "C1", "x", 1)
+    store.effect_state(r["id"] + "post", "uncertain", 1)
+    monkeypatch.setattr(admin.Config, "from_env", lambda: service.config)
+    monkeypatch.setattr(admin, "Slack", lambda *_: slack)
+    message = {
+        "user": "UBOT",
+        "ts": "12345.000003",
+        "text": f"<@U1> recognized <@U2> · 🌟 +1\nx\nRecognition ID: {r['id']}",
+    }
+    monkeypatch.setattr(
+        slack, "call", lambda method, **_: {"user_id": "UBOT", "messages": [message]}
+    )
+    admin.main(["attach-post", r["id"], message["ts"]])
+    assert store.get("T1", r["id"])["message_ts"] == "12345.000003"
+
+
+def test_status_lists_uncertain_posts_because_channel_posts_hide_ids(tmp_path, capsys):
+    db = tmp_path / "live.db"
+    store = Store(db)
+    r = store.give("q1", "T1", "U1", "U2", "C1", "x", 1)
+    store.effect_state(r["id"] + "post", "uncertain", 1)
+    admin.main(["status", "--db", str(db)])
+    assert json.loads(capsys.readouterr().out)["uncertain_posts"] == [r["id"]]
