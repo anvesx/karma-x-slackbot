@@ -100,7 +100,7 @@ def create_app(config: Config, service: Service | None = None, run_worker: bool 
             for field in ("team_id", "user_id", "channel_id", "text", "response_url", "command"):
                 if field not in p:
                     raise ValueError("missing_fields")
-            if p["team_id"] != config.team_id or p["channel_id"] not in config.channel_ids:
+            if p["team_id"] != config.team_id or not config.allows_channel(p["channel_id"]):
                 return JSONResponse(
                     {
                         "response_type": "ephemeral",

@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import UTC, datetime
 
 import pytest
@@ -108,7 +109,8 @@ def test_profile_block_does_not_lose_count(rig):
     s, slack = rig
     slack.fail_name = SlackFailure("not_allowed")
     text = s.execute(task("<@U2> ++ x"))["text"]
-    assert "blocked" in text
+    assert "display-name update is blocked (not_allowed)" in text
+    assert "profile:" not in text
     assert s.store.total("T1", "U2") == 1
 
 
@@ -116,7 +118,7 @@ def test_ambiguous_post_never_blind_retried(rig):
     s, slack = rig
     slack.fail_post = SlackFailure("transport_error", 5, True)
     response = s.execute(task("<@U2> ++ x"))
-    assert "uncertain" in response["text"]
+    assert "channel post may not have gone through" in response["text"]
     slack.fail_post = None
     s.effects()
     assert slack.posts == [] and s.store.total("T1", "U2") == 1
@@ -153,6 +155,37 @@ def test_worker_restart_processes_persisted_command(rig):
     t = task("<@U2> ++ durable")
     s.store.enqueue(t["id"], t["payload"], t["created_at_us"])
     assert s.tick() is True
-    assert slack.replies[0]["text"].startswith("Recognition K")
+    assert slack.replies[0]["text"].startswith("Saved!")
     assert s.tick() is False
     assert s.store.total("T1", "U2") == 1
+
+
+def test_wildcard_channel_award_still_checks_membership(rig):
+    service, slack = rig
+    service.config = replace(service.config, channel_ids=frozenset({"*"}))
+    assert service.execute(task("<@U2> ++ any channel", channel="C9"))["text"].startswith("Saved!")
+    slack.allowed[("U3", "C9")] = False
+    with pytest.raises(UserError, match="recipient must be a member"):
+        service.execute(task("<@U3> ++ not a member", "q2", channel="C9"))
+
+
+def test_public_messages_never_show_the_recognition_id(rig):
+    service, slack = rig
+    response = service.execute(task("<@U2> ++ great work"))
+    r = service.store.history("T1", "U1")[0]
+    assert slack.posts[0][1] == "<@U1> recognized <@U2> · 🌟 +1\ngreat work"
+    assert response["text"] == (
+        f"Saved! <@U2> now has 🌟1. To undo: /karma-x recognition cancel {r['id']}"
+    )
+    cancel = service.execute(task("recognition cancel " + r["id"], "q2"))
+    assert cancel["text"] == "Canceled. <@U2> now has 🌟0."
+    assert slack.updates[0][2] == "Canceled · <@U1> → <@U2>\ngreat work"
+    assert r["id"] not in slack.posts[0][1] + slack.updates[0][2]
+
+
+def test_private_history_keeps_ids_with_readable_local_time(rig):
+    service, _ = rig
+    service.execute(task("<@U2> ++ great work"))
+    r = service.store.history("T1", "U1")[0]
+    text = service.execute(task("recognition view", "q2"))["text"]
+    assert text.startswith(f"{r['id']} · Active · 10 Oct 2026, 17:30 IST\n")

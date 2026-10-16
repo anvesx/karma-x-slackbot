@@ -11,8 +11,8 @@ Slack is the entire user interface.
 | `/karma-x winner-of-the-month` | Winners of the current local calendar month. |
 | `/karma-x winner-of-the-year` | Winners of the current local calendar year. |
 | `/karma-x winner-between 2026-10-01 2026-10-10` | Winners between both inclusive local dates. All tied winners are returned. |
-| `/karma-x recognition view [K…]` | Your last 10 given/received recognitions, or one recognition by ID. |
-| `/karma-x recognition cancel K…` | Only the giver can cancel. Count, winners, original message, and name update; repeating cancel has no second decrement. |
+| `/karma-x recognition view [K…]` | Your last 10 given/received recognitions with their IDs, or one recognition by ID. Only you see the reply. |
+| `/karma-x recognition cancel K…` | Only the giver can cancel; the ID is in the giver's private confirmation and in `recognition view`, never in channel posts. Count, winners, original message, and name update; repeating cancel has no second decrement. |
 
 The Slack client converts a selected `@person` into a user ID. Select a mention from autocomplete.
 Dates use the command caller's Slack IANA timezone, falling back to `DEFAULT_TIMEZONE`.

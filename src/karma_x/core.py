@@ -86,3 +86,12 @@ def utc_us(value: datetime) -> int:
 def escaped(value: str) -> str:
     """Escape untrusted Slack markup, including broadcast mentions."""
     return value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def post_text(sender: str, recipient: str, reason: str) -> str:
+    """Public channel post. Recognition IDs stay in private replies only."""
+    return f"<@{sender}> recognized <@{recipient}> · 🌟 +1\n{escaped(reason)}"
+
+
+def canceled_post_text(sender: str, recipient: str, reason: str) -> str:
+    return f"Canceled · <@{sender}> → <@{recipient}>\n{escaped(reason)}"

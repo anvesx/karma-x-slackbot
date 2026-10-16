@@ -19,13 +19,14 @@ HTTPX and HTTP core logs are restricted to warnings to avoid logging credential-
 
 1. Fix the reported Slack scope, role, token, or membership error privately; restart when tokens change.
 2. Retry a safe name/message update: `docker exec karma-x python -m karma_x.admin retry-effect K_ID profile` (or `update` for a canceled recognition).
-3. For an uncertain **post**, find its exact recognition ID in the original Slack channel.
+3. For an uncertain **post**, take its recognition ID from the `uncertain_posts` list printed by `admin status` (channel posts no longer show IDs), then find the bot's matching post (same giver, recipient and reason) in the original channel and copy its timestamp.
 4. Attach the already-existing bot message: `docker exec karma-x python -m karma_x.admin attach-post K_ID EXACT_SLACK_TIMESTAMP`.
 5. Verify the thread and current name from Slack. If no post can be found, leave it uncertain or cancel the recognition; do not replay an unknown external write.
 
-The attach tool reads the exact timestamp and checks the bot author plus the final
-`Recognition ID: K…` line, which the bot appends after the reason. It does not rely on message
-metadata or accept an ID embedded in a reason. It sends no new recognition. If canceled meanwhile,
+The attach tool reads the exact timestamp and checks the bot author plus the whole message text,
+which must equal what the bot posts for that record (posts made before IDs were hidden may also end
+with a `Recognition ID: K…` line). It does not rely on message metadata or accept a partial match
+inside a reason. It sends no new recognition. If canceled meanwhile,
 it queues the existing message update. These are local operator tools, not public admin routes.
 
 ## Backup

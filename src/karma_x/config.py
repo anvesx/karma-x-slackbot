@@ -16,6 +16,10 @@ class Config:
     database: Path
     timezone: str = "Asia/Kolkata"
 
+    def allows_channel(self, channel: str) -> bool:
+        # "*" opens every channel in the workspace; per-user membership checks still apply.
+        return "*" in self.channel_ids or channel in self.channel_ids
+
     @classmethod
     def from_env(cls) -> "Config":
         required = [
