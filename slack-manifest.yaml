@@ -26,6 +26,14 @@ oauth_config:
       - users.profile:read
       - users.profile:write
 settings:
+  event_subscriptions:
+    request_url: https://REPLACE_WITH_YOUR_HOST/slack
+    bot_events:
+      - message.channels
+      - message.groups
+  interactivity:
+    is_enabled: true
+    request_url: https://REPLACE_WITH_YOUR_HOST/slack
   org_deploy_enabled: false
   socket_mode_enabled: false
   token_rotation_enabled: false

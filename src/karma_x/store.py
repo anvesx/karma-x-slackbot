@@ -7,10 +7,11 @@ so only one worker process performs Slack side effects for this database.
 import json
 import os
 import sqlite3
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from uuid import uuid4
 
 from karma_x.core import UserError
@@ -48,6 +49,37 @@ CREATE TABLE IF NOT EXISTS effects (
 CREATE INDEX IF NOT EXISTS due_effects ON effects(state,due_us);
 """
 
+# Message recognition (additive): columns arrive by ALTER first, then these run.
+RECOGNITION_COLUMNS = {
+    "origin": "TEXT NOT NULL DEFAULT 'command'",
+    "source_ts": "TEXT",
+    "thread_ts": "TEXT",
+    "group_id": "TEXT",
+}
+MESSAGE_SCHEMA = """
+CREATE TABLE IF NOT EXISTS confirmations (
+ id TEXT PRIMARY KEY, team TEXT NOT NULL, channel TEXT NOT NULL, source_ts TEXT NOT NULL,
+ thread_ts TEXT, sender TEXT NOT NULL, recipient TEXT NOT NULL, reason TEXT NOT NULL,
+ created_at_us INTEGER NOT NULL, expires_at_us INTEGER NOT NULL,
+ state TEXT NOT NULL DEFAULT 'pending'
+);
+CREATE UNIQUE INDEX IF NOT EXISTS confirmation_once ON confirmations(team,channel,source_ts,recipient);
+CREATE UNIQUE INDEX IF NOT EXISTS message_recognition_once ON recognitions(team,channel,source_ts,recipient) WHERE origin='message' AND canceled_at_us IS NULL;
+CREATE INDEX IF NOT EXISTS message_daily ON recognitions(team,sender,recipient,created_at_us) WHERE origin='message' AND canceled_at_us IS NULL;
+CREATE INDEX IF NOT EXISTS recognition_group ON recognitions(group_id) WHERE group_id IS NOT NULL;
+"""
+
+CONFIRMATION_TTL_US = 24 * 3600 * 1_000_000
+
+
+@dataclass(frozen=True)
+class MessageAward:
+    """What happened to one recipient of a message: new, already given, or over the daily limit."""
+
+    recipient: str
+    outcome: Literal["awarded", "existing", "limited"]
+    recognition_id: str
+
 
 class Store:
     def __init__(self, path: Path) -> None:
@@ -59,6 +91,11 @@ class Store:
             columns = {row[1] for row in db.execute("PRAGMA table_info(users)")}
             if "intended_name" not in columns:
                 db.execute("ALTER TABLE users ADD COLUMN intended_name TEXT NOT NULL DEFAULT ''")
+            existing = {row[1] for row in db.execute("PRAGMA table_info(recognitions)")}
+            for name, decl in RECOGNITION_COLUMNS.items():
+                if name not in existing:
+                    db.execute(f"ALTER TABLE recognitions ADD COLUMN {name} {decl}")
+            db.executescript(MESSAGE_SCHEMA)
         os.chmod(path, 0o600)
 
     @contextmanager
@@ -119,6 +156,179 @@ class Store:
                 )
             return dict(db.execute("SELECT * FROM recognitions WHERE id=?", (rid,)).fetchone())
 
+    def give_from_message(
+        self,
+        task_id: str,
+        team: str,
+        sender: str,
+        channel: str,
+        source_ts: str,
+        thread_ts: str | None,
+        recipients: Sequence[tuple[str, str]],
+        now_us: int,
+        day: tuple[int, int],
+    ) -> list[MessageAward]:
+        """Award each (recipient, reason) once per message and once per giver/day, as one group."""
+        awards: list[MessageAward] = []
+        group = ""
+        with self.transaction() as db:
+            for recipient, reason in recipients:
+                if recipient == sender:
+                    continue
+                row = db.execute(
+                    "SELECT id FROM recognitions WHERE request_id=? OR (team=? AND channel=? "
+                    "AND source_ts=? AND recipient=? AND origin='message' AND canceled_at_us IS NULL) "
+                    "ORDER BY canceled_at_us IS NOT NULL LIMIT 1",
+                    (f"{task_id}:{recipient}", team, channel, source_ts, recipient),
+                ).fetchone()
+                if row:
+                    awards.append(MessageAward(recipient, "existing", str(row["id"])))
+                    continue
+                limited = db.execute(
+                    "SELECT 1 FROM recognitions WHERE team=? AND sender=? AND recipient=? "
+                    "AND origin='message' AND canceled_at_us IS NULL "
+                    "AND created_at_us>=? AND created_at_us<? LIMIT 1",
+                    (team, sender, recipient, day[0], day[1]),
+                ).fetchone()
+                if limited:
+                    awards.append(MessageAward(recipient, "limited", ""))
+                    continue
+                rid = "K" + uuid4().hex[:16]
+                group = group or rid
+                db.execute(
+                    "INSERT INTO recognitions(id,request_id,team,sender,recipient,channel,reason,"
+                    "created_at_us,origin,source_ts,thread_ts,group_id) "
+                    "VALUES(?,?,?,?,?,?,?,?,'message',?,?,?)",
+                    (
+                        rid,
+                        f"{task_id}:{recipient}",
+                        team,
+                        sender,
+                        recipient,
+                        channel,
+                        reason,
+                        now_us,
+                        source_ts,
+                        thread_ts,
+                        group,
+                    ),
+                )
+                db.execute(
+                    "INSERT INTO users(team,slack_user_id,active_karma) VALUES(?,?,1) ON CONFLICT(team,slack_user_id) DO UPDATE SET active_karma=active_karma+1",
+                    (team, recipient),
+                )
+                db.execute(
+                    "INSERT INTO effects(id,recognition_id,kind,due_us) VALUES(?,?,'profile',?)",
+                    (rid + "profile", rid, now_us),
+                )
+                awards.append(MessageAward(recipient, "awarded", rid))
+            if group:
+                # One public post per group, owned by the group's first recognition.
+                db.execute(
+                    "INSERT INTO effects(id,recognition_id,kind,due_us) VALUES(?,?,'post',?)",
+                    (group + "post", group, now_us),
+                )
+        return awards
+
+    def group_members(self, group_id: str) -> list[dict[str, Any]]:
+        with self.connection() as db:
+            return [
+                dict(r)
+                for r in db.execute(
+                    "SELECT * FROM recognitions WHERE group_id=? ORDER BY created_at_us,rowid",
+                    (group_id,),
+                )
+            ]
+
+    def record_group_message(self, group_id: str, timestamp: str) -> None:
+        with self.transaction() as db:
+            db.execute(
+                "UPDATE recognitions SET message_ts=?,post_state='posted' WHERE group_id=?",
+                (timestamp, group_id),
+            )
+
+    def record_group_link(self, group_id: str, permalink: str) -> None:
+        with self.transaction() as db:
+            db.execute(
+                "UPDATE recognitions SET permalink=? WHERE group_id=?", (permalink, group_id)
+            )
+
+    def message_recognitions(self, team: str, channel: str, source_ts: str) -> list[dict[str, Any]]:
+        """Active automatic recognitions that came from one Slack message."""
+        with self.connection() as db:
+            return [
+                dict(r)
+                for r in db.execute(
+                    "SELECT * FROM recognitions WHERE team=? AND channel=? AND source_ts=? "
+                    "AND origin='message' AND canceled_at_us IS NULL ORDER BY created_at_us,rowid",
+                    (team, channel, source_ts),
+                )
+            ]
+
+    def ask_later(
+        self,
+        team: str,
+        channel: str,
+        source_ts: str,
+        thread_ts: str | None,
+        sender: str,
+        recipient: str,
+        reason: str,
+        now_us: int,
+    ) -> tuple[str, bool]:
+        """Record a pending Award/Skip question; returns (id, newly created)."""
+        cid = "C" + uuid4().hex[:16]
+        with self.transaction() as db:
+            created = db.execute(
+                "INSERT INTO confirmations(id,team,channel,source_ts,thread_ts,sender,recipient,"
+                "reason,created_at_us,expires_at_us) VALUES(?,?,?,?,?,?,?,?,?,?) "
+                "ON CONFLICT(team,channel,source_ts,recipient) DO NOTHING",
+                (
+                    cid,
+                    team,
+                    channel,
+                    source_ts,
+                    thread_ts,
+                    sender,
+                    recipient,
+                    reason,
+                    now_us,
+                    now_us + CONFIRMATION_TTL_US,
+                ),
+            ).rowcount
+            if created == 1:
+                return cid, True
+            row = db.execute(
+                "SELECT id FROM confirmations WHERE team=? AND channel=? AND source_ts=? AND recipient=?",
+                (team, channel, source_ts, recipient),
+            ).fetchone()
+            return str(row["id"]), False
+
+    def confirmation(self, team: str, cid: str) -> dict[str, Any] | None:
+        with self.connection() as db:
+            row = db.execute(
+                "SELECT * FROM confirmations WHERE team=? AND id=?", (team, cid)
+            ).fetchone()
+        return dict(row) if row else None
+
+    def settle_confirmation(
+        self, cid: str, state: Literal["awarded", "skipped", "expired"]
+    ) -> bool:
+        """Move a pending confirmation to its final state; False when it was no longer pending."""
+        with self.transaction() as db:
+            changed = db.execute(
+                "UPDATE confirmations SET state=? WHERE id=? AND state='pending'", (state, cid)
+            ).rowcount
+        return changed == 1
+
+    def expire_confirmations(self, team: str, channel: str, source_ts: str) -> None:
+        with self.transaction() as db:
+            db.execute(
+                "UPDATE confirmations SET state='expired' WHERE team=? AND channel=? "
+                "AND source_ts=? AND state='pending'",
+                (team, channel, source_ts),
+            )
+
     def get(self, team: str, rid: str) -> dict[str, Any]:
         with self.connection() as db:
             row = db.execute(
@@ -151,10 +361,11 @@ class Store:
                         "INSERT INTO effects(id,recognition_id,kind,due_us) VALUES(?,?,?,?) ON CONFLICT(recognition_id,kind) DO UPDATE SET state='pending',due_us=excluded.due_us,error=NULL,attempts=0",
                         (rid + kind, rid, kind, now_us),
                     )
-                db.execute(
-                    "UPDATE effects SET state='done' WHERE recognition_id=? AND kind='post' AND state='pending'",
-                    (rid,),
-                )
+                if row["group_id"] is None:
+                    db.execute(
+                        "UPDATE effects SET state='done' WHERE recognition_id=? AND kind='post' AND state='pending'",
+                        (rid,),
+                    )
             return dict(db.execute("SELECT * FROM recognitions WHERE id=?", (rid,)).fetchone())
 
     def total(self, team: str, user: str) -> int:

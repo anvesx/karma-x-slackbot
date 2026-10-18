@@ -69,3 +69,16 @@ def test_dst(day, hours):
 def test_inclusive_end():
     start, end = date_window("between", "UTC", datetime.now(UTC), "2026-10-01", "2026-10-10")
     assert start.day == 1 and end.day == 11
+
+
+def test_group_post_keeps_user_mentions_in_reasons_but_escapes_broadcasts():
+    from karma_x.core import GroupMember, group_post_text
+
+    reason = "Kudos to <@U2> and <@U3> <!here> for the launch & more"
+    single = group_post_text("U1", [GroupMember("U2", reason, False)])
+    assert "Kudos to <@U2> and <@U3>" in single and "&lt;!here&gt;" in single
+    assert "&amp; more" in single and single.startswith("<@U1> recognized <@U2> · 🌟 +1\n")
+    both = group_post_text(
+        "U1", [GroupMember("U2", reason, False), GroupMember("U3", reason, False)]
+    )
+    assert "— Kudos to <@U2> and <@U3>" in both and "<!here>" not in both

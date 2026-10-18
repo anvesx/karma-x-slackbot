@@ -1,6 +1,7 @@
 """Pure command and calendar logic: clocks and I/O are caller supplied."""
 
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -88,10 +89,41 @@ def escaped(value: str) -> str:
     return value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
-def post_text(sender: str, recipient: str, reason: str) -> str:
+USER_MENTION = re.compile(r"&lt;@([UW][A-Z0-9]+)&gt;")
+
+
+def message_reason(reason: str) -> str:
+    """Escape a quoted Slack message but keep its user mentions (never broadcasts)."""
+    return USER_MENTION.sub(r"<@\1>", escaped(reason))
+
+
+def post_text(sender: str, recipient: str, reason: str, *, rendered: str = "") -> str:
     """Public channel post. Recognition IDs stay in private replies only."""
-    return f"<@{sender}> recognized <@{recipient}> · 🌟 +1\n{escaped(reason)}"
+    return f"<@{sender}> recognized <@{recipient}> · 🌟 +1\n{rendered or escaped(reason)}"
 
 
 def canceled_post_text(sender: str, recipient: str, reason: str) -> str:
     return f"Canceled · <@{sender}> → <@{recipient}>\n{escaped(reason)}"
+
+
+@dataclass(frozen=True)
+class GroupMember:
+    recipient: str
+    reason: str
+    canceled: bool
+
+
+def group_post_text(sender: str, members: Sequence[GroupMember]) -> str:
+    """One public post for every person recognised by one message."""
+    if len(members) == 1:
+        only = members[0]
+        if only.canceled:
+            return f"Canceled · <@{sender}> → <@{only.recipient}>\n{message_reason(only.reason)}"
+        return post_text(sender, only.recipient, only.reason, rendered=message_reason(only.reason))
+    lines = [
+        f"• ~<@{m.recipient}>~ canceled"
+        if m.canceled
+        else f"• <@{m.recipient}> · 🌟 +1 — {message_reason(m.reason)}"
+        for m in members
+    ]
+    return f"<@{sender}> recognized:\n" + "\n".join(lines)
