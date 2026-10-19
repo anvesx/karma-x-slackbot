@@ -60,7 +60,8 @@ class Slack:
             if not cursor:
                 return False
 
-    def post(self, channel: str, text: str, _rid: str) -> str:
+    def post(self, channel: str, text: str, _rid: str, thread_ts: str | None = None) -> str:
+        extra: dict[str, Any] = {"thread_ts": thread_ts} if thread_ts else {}
         r = self.call(
             "chat.postMessage",
             posting=True,
@@ -68,8 +69,32 @@ class Slack:
             text=text,
             unfurl_links=False,
             unfurl_media=False,
+            **extra,
         )
         return str(r["ts"])
+
+    def ephemeral(
+        self,
+        channel: str,
+        user: str,
+        text: str,
+        blocks: list[dict[str, Any]],
+        thread_ts: str | None = None,
+    ) -> None:
+        """Private reply when there is no response_url (message events)."""
+        extra: dict[str, Any] = {}
+        if blocks:
+            extra["blocks"] = blocks
+        if thread_ts:
+            extra["thread_ts"] = thread_ts
+        try:
+            self.call(
+                "chat.postEphemeral", posting=True, channel=channel, user=user, text=text, **extra
+            )
+        except SlackFailure as error:
+            if error.retry_after and not error.ambiguous:
+                raise SlackFailure("response_rate_limited", error.retry_after) from error
+            raise
 
     def permalink(self, channel: str, ts: str) -> str:
         return str(self.call("chat.getPermalink", channel=channel, message_ts=ts)["permalink"])
@@ -94,7 +119,7 @@ class Slack:
             or parsed.port not in {None, 443}
             or parsed.username
             or parsed.password
-            or not parsed.path.startswith("/commands/")
+            or not parsed.path.startswith(("/commands/", "/actions/"))
         ):
             raise UserError("Invalid Slack response URL.")
         if payload.get("blocks"):

@@ -3,6 +3,7 @@
 import asyncio
 import fcntl
 import hashlib
+import json
 import logging
 import os
 import sqlite3
@@ -10,12 +11,14 @@ import threading
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
+from typing import Any
 from urllib.parse import parse_qs
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from slack_sdk.signature import SignatureVerifier
 
+from karma_x import events
 from karma_x.config import Config
 from karma_x.core import UserError, parse_command, utc_us
 from karma_x.service import Service
@@ -75,17 +78,39 @@ def create_app(config: Config, service: Service | None = None, run_worker: bool 
             db.execute("SELECT 1").fetchone()
         return JSONResponse({"status": "ok", "bot": "karma-x"})
 
-    @app.post("/slack/commands")
-    async def commands(request: Request) -> JSONResponse:
+    async def signed_body(request: Request, limit: int) -> bytes | JSONResponse:
+        """The request body if it fits under limit and carries a fresh, valid signature."""
         body = bytearray()
         async for chunk in request.stream():
             body.extend(chunk)
-            if len(body) > 16384:
+            if len(body) > limit:
                 return JSONResponse({"error": "request_too_large"}, status_code=413)
         timestamp = request.headers.get("x-slack-request-timestamp", "")
         valid_timestamp = 1 <= len(timestamp) <= 12 and timestamp.isascii() and timestamp.isdigit()
         if not valid_timestamp or not verifier.is_valid_request(bytes(body), dict(request.headers)):
             return JSONResponse({"error": "invalid_signature"}, status_code=401)
+        return bytes(body)
+
+    async def enqueue(key: str, payload: dict[str, Any]) -> bool | None:
+        """Durably enqueue; True if new, False if a duplicate, None if admission is full."""
+        # Never block the event loop on SQLite's busy timeout. Bound both admission
+        # and active writes so contention returns before Slack's 3-second deadline.
+        try:
+            await asyncio.wait_for(admission.acquire(), timeout=0.05)
+        except TimeoutError:
+            return None
+        pending = asyncio.create_task(
+            asyncio.to_thread(store.enqueue, key, payload, utc_us(datetime.now(UTC)))
+        )
+        pending.add_done_callback(release_admission)
+        # A disconnected caller may leave a committed job; signed retries deduplicate it.
+        return await asyncio.shield(pending)
+
+    @app.post("/slack/commands")
+    async def commands(request: Request) -> JSONResponse:
+        body = await signed_body(request, 16384)
+        if isinstance(body, JSONResponse):
+            return body
         if not request.headers.get("content-type", "").startswith(
             "application/x-www-form-urlencoded"
         ):
@@ -115,18 +140,9 @@ def create_app(config: Config, service: Service | None = None, run_worker: bool 
             key = hashlib.sha256(
                 request.headers["x-slack-request-timestamp"].encode() + b":" + body
             ).hexdigest()
-            # Never block the event loop on SQLite's busy timeout. Bound both admission
-            # and active writes so contention returns before Slack's 3-second deadline.
-            try:
-                await asyncio.wait_for(admission.acquire(), timeout=0.05)
-            except TimeoutError:
+            accepted = await enqueue(key, p)
+            if accepted is None:
                 return JSONResponse({"error": "database_busy"}, status_code=503)
-            pending = asyncio.create_task(
-                asyncio.to_thread(store.enqueue, key, p, utc_us(datetime.now(UTC)))
-            )
-            pending.add_done_callback(release_admission)
-            # A disconnected caller may leave a committed job; signed retries deduplicate it.
-            accepted = await asyncio.shield(pending)
         except (ValueError, UnicodeError) as e:
             if isinstance(e, UserError):
                 return JSONResponse({"response_type": "ephemeral", "text": str(e)})
@@ -140,6 +156,59 @@ def create_app(config: Config, service: Service | None = None, run_worker: bool 
                 "text": "Processing…" if accepted else "This request was already accepted.",
             }
         )
+
+    @app.post("/slack")
+    async def slack(request: Request) -> JSONResponse:
+        body = await signed_body(request, 131072)
+        if isinstance(body, JSONResponse):
+            return body
+        content_type = request.headers.get("content-type", "")
+        try:
+            if content_type.startswith("application/json"):
+                envelope = json.loads(body)
+                if not isinstance(envelope, dict):
+                    raise ValueError("not_an_object")
+                if envelope.get("type") == "url_verification":
+                    challenge = envelope.get("challenge")
+                    if not isinstance(challenge, str):
+                        raise ValueError("missing_challenge")
+                    return JSONResponse({"challenge": challenge})
+                if envelope.get("type") != "event_callback":
+                    raise ValueError("unknown_event_type")
+                event = envelope.get("event")
+                channel = event.get("channel") if isinstance(event, dict) else None
+                in_scope = envelope.get("team_id") == config.team_id and isinstance(channel, str)
+                item: events.MessagePosted | events.MessageDeleted | events.ButtonClick | None = (
+                    events.parse_event(envelope)
+                    if in_scope and config.allows_channel(str(channel))
+                    else None
+                )
+            elif content_type.startswith("application/x-www-form-urlencoded"):
+                form = parse_qs(
+                    body.decode("utf-8"),
+                    keep_blank_values=True,
+                    strict_parsing=True,
+                    max_num_fields=5,
+                )
+                if list(form) != ["payload"] or len(form["payload"]) != 1:
+                    raise ValueError("expected_payload")
+                interaction = json.loads(form["payload"][0])
+                if not isinstance(interaction, dict) or interaction.get("type") != "block_actions":
+                    raise ValueError("unknown_interaction")
+                item = events.parse_click(interaction)
+                if item and (
+                    item.team_id != config.team_id or not config.allows_channel(item.channel_id)
+                ):
+                    item = None
+            else:
+                return JSONResponse({"error": "invalid_content_type"}, status_code=400)
+            if item is not None and await enqueue(item.key, item.to_payload()) is None:
+                return JSONResponse({"error": "database_busy"}, status_code=503)
+        except (ValueError, UnicodeError):
+            return JSONResponse({"error": "invalid_payload"}, status_code=400)
+        except sqlite3.OperationalError:
+            return JSONResponse({"error": "database_busy"}, status_code=503)
+        return JSONResponse({})
 
     return app
 

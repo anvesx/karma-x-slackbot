@@ -1,0 +1,503 @@
+# Made-up recognition cases. Scored with a fake scorer returning 0.95.
+# `expect` maps each mentioned user to the outcome; `nomodel` (optional) overrides the
+# NoModel result, which is otherwise the same with every "auto" turned into "confirm".
+# Author is U1 unless `author` is set. `blocks` are optional rich_text pieces.
+
+# --- worked cases from the spec -------------------------------------------------
+[[case]]
+name = "worked: kudos to two people"
+rule = "A1 name-group"
+text = "Huge kudos to <@UA> and <@UB> for shipping Mayave through the ERP change"
+expect = { UA = "auto", UB = "auto" }
+
+[[case]]
+name = "worked: opening line passes kudos to bullets"
+rule = "K-inherited"
+text = "Big kudos to the team!\n• <@UJ> — worked from the client office through go-live\n• <@UY> — built the website integration"
+expect = { UJ = "auto", UY = "auto" }
+
+[[case]]
+name = "worked: thank you, really appreciated"
+rule = "T cue, no content"
+text = "Thank you, <@UK>. Really appreciated."
+expect = { UK = "confirm" }
+
+[[case]]
+name = "worked: thanks for the link"
+rule = "trivial favour"
+text = "thanks <@UB> for the link"
+expect = { UB = "confirm" }
+
+[[case]]
+name = "worked: request then thanks"
+rule = "V2 V3"
+text = "<@UB> can you review my PR? thanks"
+expect = { UB = "ignore" }
+
+[[case]]
+name = "worked: cc"
+rule = "V1"
+text = "CC- <@UK>"
+expect = { UK = "ignore" }
+
+[[case]]
+name = "worked: sarcasm emoji"
+rule = "V5"
+text = "great job breaking prod <@UX> 🙃"
+expect = { UX = "ignore" }
+
+[[case]]
+name = "worked: good job with emoji only"
+rule = "P cue, emoji is not content"
+text = "Good job <@UP> :cherry_blossom:"
+expect = { UP = "confirm" }
+
+[[case]]
+name = "worked: emoji only"
+rule = "emoji is never a cue"
+text = "<@UN> :fire: :fire:"
+expect = { UN = "ignore" }
+
+[[case]]
+name = "worked: thanks for nothing"
+rule = "V4"
+text = "thanks for nothing <@UX>"
+expect = { UX = "ignore" }
+
+[[case]]
+name = "worked: please do the needful"
+rule = "V3"
+text = "<@UK> - please do the needful :moneybag:"
+expect = { UK = "ignore" }
+
+# --- clean ----------------------------------------------------------------------
+[[case]]
+name = "clean: quoted line is removed"
+rule = "clean quote"
+text = "> thanks <@UB> for everything you did\nsee above"
+expect = {}
+
+[[case]]
+name = "clean: fenced code is removed"
+rule = "clean fence"
+text = "```\nthanks <@UB>\n```\nok"
+expect = {}
+
+[[case]]
+name = "clean: inline code is removed"
+rule = "clean backticks"
+text = "run `kudos <@UB>` now"
+expect = {}
+
+[[case]]
+name = "clean: bare url with question mark"
+rule = "clean URL"
+text = "Kudos to <@UB> for fixing the payment retries https://example.test/a?b=1"
+expect = { UB = "auto" }
+
+[[case]]
+name = "clean: slack url with question mark"
+rule = "clean URL"
+text = "<https://example.test/a?b=1|PR> Kudos to <@UB> for fixing the payment retries"
+expect = { UB = "auto" }
+
+[[case]]
+name = "clean: here is removed"
+rule = "clean broadcast"
+text = "<!here> kudos to <@UB> for fixing the payment retries"
+expect = { UB = "auto" }
+
+[[case]]
+name = "clean: subteam is removed"
+rule = "clean broadcast"
+text = "<!subteam^S1> thanks <@UB> for fixing the payment retries today"
+expect = { UB = "auto" }
+
+[[case]]
+name = "clean: mention with display name"
+rule = "mention markup"
+text = "Kudos <@UB|bob> for fixing the payment retries"
+expect = { UB = "auto" }
+
+# --- gate -----------------------------------------------------------------------
+[[case]]
+name = "gate: self mention"
+rule = "step 0"
+text = "Kudos to <@U1> for fixing the payment retries"
+expect = { U1 = "ignore" }
+
+[[case]]
+name = "gate: no mention"
+rule = "step 0"
+text = "Kudos to everyone for fixing the payment retries"
+expect = {}
+
+[[case]]
+name = "gate: no author"
+rule = "step 0"
+author = ""
+text = "Kudos to <@UB> for fixing the payment retries"
+expect = {}
+
+# --- segment and attribute ------------------------------------------------------
+[[case]]
+name = "segment: dash bullet without opening cue relies on the model"
+rule = "segment bullets"
+text = "- <@UB> — fixed the payment retries"
+expect = { UB = "confirm" }
+nomodel = { UB = "ignore" }
+
+[[case]]
+name = "segment: numbered bullets inherit kudos"
+rule = "K-inherited"
+text = "Kudos this week:\n1. <@UB> — fixed the payment retries\n2. <@UC> — wrote the migration guide"
+expect = { UB = "auto", UC = "auto" }
+
+[[case]]
+name = "attribute: colon separator inherits"
+rule = "K-inherited"
+text = "Shout out to the team\n<@UB>: led the vendor negotiation"
+expect = { UB = "auto" }
+
+[[case]]
+name = "attribute: opening line naming someone does not inherit"
+rule = "K-inherited"
+text = "Kudos to <@UA>!\n<@UB> - wrote the migration guide"
+expect = { UA = "confirm", UB = "confirm" }
+nomodel = { UA = "confirm", UB = "ignore" }
+
+[[case]]
+name = "attribute: no separator does not inherit"
+rule = "K-inherited"
+text = "Kudos to the team\n<@UB> wrote the migration guide"
+expect = { UB = "confirm" }
+nomodel = { UB = "ignore" }
+
+[[case]]
+name = "segment: sentences are isolated"
+rule = "segment sentences"
+text = "Thanks <@UB> for the quick fix on the billing report. <@UC> can you review my PR?"
+expect = { UB = "auto", UC = "ignore" }
+
+[[case]]
+name = "segment: rich_text list item"
+rule = "segment blocks"
+text = "Kudos to the team\n<@UB> — led the vendor negotiation"
+blocks = [
+  { kind = "section", text = "Kudos to the team" },
+  { kind = "list_item", text = "<@UB> — led the vendor negotiation" },
+]
+expect = { UB = "auto" }
+
+[[case]]
+name = "segment: rich_text section split on newlines"
+rule = "segment blocks"
+text = "Kudos to <@UB> for fixing the payment retries\nplease ping <@UC> about it"
+blocks = [
+  { kind = "section", text = "Kudos to <@UB> for fixing the payment retries\nplease ping <@UC> about it" },
+]
+expect = { UB = "auto", UC = "ignore" }
+
+[[case]]
+name = "attribute: name group shares the segment"
+rule = "name group"
+text = "Kudos <@UA>, <@UB> & <@UC> for shipping the ERP rollout"
+expect = { UA = "auto", UB = "auto", UC = "auto" }
+
+[[case]]
+name = "attribute: cc applies to the whole group"
+rule = "V1 name group"
+text = "cc <@UA> and <@UB>"
+expect = { UA = "ignore", UB = "ignore" }
+
+[[case]]
+name = "attribute: cc only hits the mention after it"
+rule = "V1"
+text = "thanks <@UA> for writing the onboarding guide, cc <@UB>"
+expect = { UA = "auto", UB = "ignore" }
+
+# --- cues -----------------------------------------------------------------------
+[[case]]
+name = "K: hats off"
+rule = "K"
+text = "Hats off to <@UB> for fixing the payment retries"
+expect = { UB = "auto" }
+
+[[case]]
+name = "K: props to"
+rule = "K"
+text = "Props to <@UB> for fixing the payment retries"
+expect = { UB = "auto" }
+
+[[case]]
+name = "K: grateful"
+rule = "K"
+text = "Grateful to <@UB> for fixing the payment retries"
+expect = { UB = "auto" }
+
+[[case]]
+name = "K: special thanks beats T"
+rule = "K over T"
+text = "Special thanks to <@UB> for fixing the payment retries"
+expect = { UB = "auto" }
+
+[[case]]
+name = "K: thank you so much"
+rule = "K"
+text = "Thank you so much <@UB> for fixing the payment retries"
+expect = { UB = "auto" }
+
+[[case]]
+name = "K: appreciate"
+rule = "K"
+text = "I really appreciate <@UB> fixing the payment retries"
+expect = { UB = "auto" }
+
+[[case]]
+name = "T: thx"
+rule = "T A2"
+text = "thx <@UB> for fixing the payment retries"
+expect = { UB = "auto" }
+
+[[case]]
+name = "T: ty"
+rule = "T A2"
+text = "ty <@UB> for fixing the payment retries"
+expect = { UB = "auto" }
+
+[[case]]
+name = "P: great work"
+rule = "P A2"
+text = "Great work <@UB> on the payment retries rewrite"
+expect = { UB = "auto" }
+
+[[case]]
+name = "P: nailed it"
+rule = "P A2"
+text = "<@UB> nailed it with the payment retries rewrite"
+expect = { UB = "auto" }
+
+[[case]]
+name = "P: well done alone"
+rule = "P"
+text = "Well done <@UB>"
+expect = { UB = "confirm" }
+
+[[case]]
+name = "P: legend with one content word"
+rule = "P"
+text = "<@UB> is an absolute legend"
+expect = { UB = "confirm" }
+
+[[case]]
+name = "P: proud of"
+rule = "P"
+text = "Proud of <@UB>"
+expect = { UB = "confirm" }
+
+[[case]]
+name = "mvp alone is not a cue (accepted miss)"
+rule = "no cue (model-only)"
+text = "<@UB> is the MVP of this release"
+expect = { UB = "confirm" }
+nomodel = { UB = "ignore" }
+
+[[case]]
+name = "emoji: only emoji after praise"
+rule = "emoji is not content"
+text = "Great job <@UB> :clap: :tada:"
+expect = { UB = "confirm" }
+
+[[case]]
+name = "emoji: clapping alone"
+rule = "emoji is never a cue"
+text = "<@UB> 🙌👏🎉"
+expect = { UB = "ignore" }
+
+# --- reason and content words ---------------------------------------------------
+[[case]]
+name = "A2 blocked by trivial favour"
+rule = "trivial favours"
+text = "thanks <@UB> for the update on the invite"
+expect = { UB = "confirm" }
+
+[[case]]
+name = "A1 not blocked by trivial favour"
+rule = "A1"
+text = "Kudos to <@UB> for the quick update on payment retries"
+expect = { UB = "auto" }
+
+[[case]]
+name = "A1 needs three content words"
+rule = "A1"
+text = "Kudos to <@UB> for the help"
+expect = { UB = "confirm" }
+
+# --- vetoes ---------------------------------------------------------------------
+[[case]]
+name = "V1: fyi with colon"
+rule = "V1"
+text = "FYI: <@UB>"
+expect = { UB = "ignore" }
+
+[[case]]
+name = "V1: looping in"
+rule = "V1"
+text = "looping in <@UB>"
+expect = { UB = "ignore" }
+
+[[case]]
+name = "V1: plus"
+rule = "V1"
+text = "+ <@UB> kudos for the rollout plan"
+expect = { UB = "ignore" }
+
+[[case]]
+name = "V1: tagging"
+rule = "V1"
+text = "tagging <@UB> thanks for the report"
+expect = { UB = "ignore" }
+
+[[case]]
+name = "V2: question mark"
+rule = "V2"
+text = "Thanks <@UB>, did the rollout finish?"
+expect = { UB = "ignore" }
+
+[[case]]
+name = "V3: please"
+rule = "V3"
+text = "Thanks <@UB>, please send the report"
+expect = { UB = "ignore" }
+
+[[case]]
+name = "V3: lmk"
+rule = "V3"
+text = "<@UB> lmk, thanks"
+expect = { UB = "ignore" }
+
+[[case]]
+name = "V3: when will"
+rule = "V3"
+text = "thanks <@UB> when will the rollout land"
+expect = { UB = "ignore" }
+
+[[case]]
+name = "V3: need you to"
+rule = "V3"
+text = "thanks <@UB> I need you to approve the rollout plan"
+expect = { UB = "ignore" }
+
+[[case]]
+name = "V4: no thanks"
+rule = "V4"
+text = "no thanks <@UB>"
+expect = { UB = "ignore" }
+
+[[case]]
+name = "V4: thanks but"
+rule = "V4"
+text = "thanks <@UB> but the rollout plan still has gaps"
+expect = { UB = "ignore" }
+
+[[case]]
+name = "V4: not great work"
+rule = "V4"
+text = "not great work <@UB> on the rollout plan"
+expect = { UB = "ignore" }
+
+[[case]]
+name = "V5: slash s"
+rule = "V5"
+text = "Kudos <@UB> for fixing the payment retries /s"
+expect = { UB = "ignore" }
+
+[[case]]
+name = "V5: rolling eyes shortcode"
+rule = "V5"
+text = "thanks <@UB> for fixing the payment retries :face_with_rolling_eyes:"
+expect = { UB = "ignore" }
+
+[[case]]
+name = "V5: cue then broke"
+rule = "V5"
+text = "Great work <@UB>, you broke the build"
+expect = { UB = "ignore" }
+
+# --- model path and repeated mentions ------------------------------------------
+[[case]]
+name = "model only: no cue but content"
+rule = "confirm_cutoff"
+text = "<@UB> fixed the payment retries overnight"
+expect = { UB = "confirm" }
+nomodel = { UB = "ignore" }
+
+[[case]]
+name = "repeat: strongest outcome wins"
+rule = "merge"
+text = "thanks <@UB>. Kudos <@UB> for fixing the payment retries today"
+expect = { UB = "auto" }
+
+[[case]]
+name = "repeat: auto beats ignore"
+rule = "merge"
+text = "<@UB> can you check? Kudos <@UB> for fixing the payment retries"
+expect = { UB = "auto" }
+
+[[case]]
+name = "mixed outcomes in one message"
+rule = "per mention"
+text = "Kudos to <@UA> for fixing the payment retries. thanks <@UB> for the link"
+expect = { UA = "auto", UB = "confirm" }
+
+# --- review fixes: requests phrased as thanks, dev jargon that is not praise ---
+[[case]]
+name = "request phrased with appreciate"
+rule = "V3"
+text = "<@UR> I'd appreciate a review of the migration plan before Friday"
+expect = { UR = "ignore" }
+
+[[case]]
+name = "would appreciate it if"
+rule = "V3"
+text = "<@UR> would appreciate it if the staging database gets reset tonight"
+expect = { UR = "ignore" }
+
+[[case]]
+name = "thanks in advance is a request"
+rule = "V3"
+text = "<@UR> thanks in advance for reviewing the deploy plan tomorrow"
+expect = { UR = "ignore" }
+
+[[case]]
+name = "tia is a request"
+rule = "V3"
+text = "<@UR> tia for sharing the release checklist with the client team"
+expect = { UR = "ignore" }
+
+[[case]]
+name = "mvp is product jargon, not praise"
+rule = "no cue (model-only)"
+text = "<@UM> the MVP scope is frozen for next sprint"
+expect = { UM = "confirm" }
+nomodel = { UM = "ignore" }
+
+[[case]]
+name = "legend on a chart is not praise"
+rule = "no cue (model-only)"
+text = "<@UL> the legend on the revenue chart is wrong"
+expect = { UL = "confirm" }
+nomodel = { UL = "ignore" }
+
+[[case]]
+name = "you're a legend is praise"
+rule = "A2"
+text = "<@UL> you're a legend for fixing the payment retries overnight"
+expect = { UL = "auto" }
+
+# --- real #kudos data (2026-10-18): plural cue ---
+[[case]]
+name = "plural shoutouts is a kudos cue"
+rule = "A1"
+text = "Shoutouts to <@UA> for running the migration dry run twice"
+expect = { UA = "auto" }

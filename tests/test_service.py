@@ -189,3 +189,20 @@ def test_private_history_keeps_ids_with_readable_local_time(rig):
     r = service.store.history("T1", "U1")[0]
     text = service.execute(task("recognition view", "q2"))["text"]
     assert text.startswith(f"{r['id']} · Active · 10 Oct 2026, 17:30 IST\n")
+
+
+def test_help_explains_commands_and_automatic_karma(rig):
+    service, _ = rig
+    text = service.execute(task("help"))["text"]
+    for expected in [
+        "/karma-x @person ++ reason",
+        "list-all",
+        "winner-of-the-day",
+        "winner-between",
+        "recognition view",
+        "recognition cancel",
+        "threads",
+        "Award",
+        "once a day",
+    ]:
+        assert expected in text

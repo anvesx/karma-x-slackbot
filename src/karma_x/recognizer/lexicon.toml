@@ -1,0 +1,50 @@
+# Recognizer word lists. Matched case-insensitively on word boundaries.
+# Changing this file changes behaviour: update tests/fixtures/recognition_cases.toml with it.
+
+[cues]
+kudos = [
+  "kudos", "shoutout", "shoutouts", "shout-out", "shout-outs", "shout out", "shout outs", "hats off", "props to",
+  "big thanks", "huge thanks", "special thanks", "many thanks", "thanks a ton",
+  "thank you so much", "grateful", "appreciate", "appreciated", "appreciation",
+]
+thanks = ["thanks", "thank you", "thankyou", "thx", "ty"]
+praise_adjectives = ["great", "good", "amazing", "awesome", "excellent", "fantastic"]
+praise_nouns = ["job", "work"]
+praise_phrases = [
+  "well done", "nailed it", "crushed it", "killed it", "superb", "too good",
+  "rockstar", "true gem", "true gems", "proud of",
+  # "legend" and "mvp" are dev jargon on their own (chart legend, minimum viable product).
+  "you're a legend", "you are a legend", "absolute legend",
+]
+trivial = [
+  "link", "doc", "info", "update", "invite", "reminder", "heads up", "quick reply",
+  "response", "call", "access", "confirmation", "got it", "noted", "ok", "okay", "sure",
+]
+
+[vetoes]
+# V1: directly before the mention (punctuation ignored). "+" is handled in code.
+before_mention = ["cc", "fyi", "looping in", "adding", "tagging"]
+# V3: request phrases anywhere in the segment.
+requests = [
+  "can you", "could you", "would you", "please", "pls", "plz", "kindly",
+  "do the needful", "need you to", "let me know", "lmk", "when will",
+  # Thanks or appreciation for something not yet done is a request.
+  "would appreciate", "i'd appreciate", "appreciate it if", "appreciate if",
+  "thanks in advance", "thank you in advance", "thx in advance", "tia",
+]
+# V4: within 3 words of a cue.
+negations = ["not", "no", "never", "nothing", "but"]
+# V5: sarcasm markers in the segment (" /s" is handled in code).
+sarcasm = ["🙃", "🙄", "😒", ":upside_down_face:", ":face_with_rolling_eyes:", ":unamused:"]
+# V5: a cue followed within 4 words by one of these.
+breaking = ["breaking", "broke", "broken"]
+
+[stopwords]
+words = [
+  "a", "an", "the", "and", "or", "of", "to", "for", "in", "on", "at", "by", "with",
+  "from", "as", "is", "are", "was", "were", "be", "been", "it", "its", "this", "that",
+  "these", "those", "my", "our", "your", "their", "his", "her", "i", "we", "you",
+  "they", "he", "she", "me", "us", "them", "so", "very", "really", "just", "all",
+  "team", "everyone", "also", "too", "again", "here", "there", "about", "into",
+  "up", "out", "have", "has", "had", "do", "did", "does", "will", "would",
+]

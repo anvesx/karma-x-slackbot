@@ -1,6 +1,7 @@
 """Pure command and calendar logic: clocks and I/O are caller supplied."""
 
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -30,6 +31,8 @@ def parse_command(text: str) -> Command:
         if not reason or len(reason) > 2000:
             raise UserError("Provide a reason of 1–2000 characters.")
         return Command("give", m[1], reason)
+    if text.lower() == "help":
+        return Command("help")
     if text == "list-all":
         return Command("list")
     if text in {"winner-of-the-day", "winner-of-the-month", "winner-of-the-year"}:
@@ -50,8 +53,22 @@ def parse_command(text: str) -> Command:
         return Command(m[1], m[2])
     raise UserError(
         "Use /karma-x @person ++ reason, list-all, winner-of-the-day/month/year, "
-        "winner-between YYYY-MM-DD YYYY-MM-DD, or recognition view/cancel <ID>."
+        "winner-between YYYY-MM-DD YYYY-MM-DD, or recognition view/cancel <ID>. "
+        "Try /karma-x help."
     )
+
+
+HELP_TEXT = """*karma-x* · one recognition, one karma
+*Give karma*
+• `/karma-x @person ++ reason`: +1 to one person, posted in this channel.
+• Or just thank people in a message or thread reply ("Huge kudos to @A and @B for…"). karma-x reads channels it was invited to and either gives +1 or privately asks you to *Award* or *Skip*. Slash commands don't work in threads, so this is how to give karma there.
+• Automatic karma goes to the same person at most once a day. Questions, requests, cc/fyi, and yourself never count.
+*See karma*
+• `/karma-x list-all`: top 30.
+• `/karma-x winner-of-the-day` (or `-month`, `-year`), `/karma-x winner-between YYYY-MM-DD YYYY-MM-DD`.
+• `/karma-x recognition view`: your recent recognitions.
+*Undo*
+• `/karma-x recognition cancel <ID>`: the ID is in the private reply you got when giving karma. Deleting your message also cancels its automatic karma."""
 
 
 def date_window(
@@ -88,10 +105,41 @@ def escaped(value: str) -> str:
     return value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
-def post_text(sender: str, recipient: str, reason: str) -> str:
+USER_MENTION = re.compile(r"&lt;@([UW][A-Z0-9]+)&gt;")
+
+
+def message_reason(reason: str) -> str:
+    """Escape a quoted Slack message but keep its user mentions (never broadcasts)."""
+    return USER_MENTION.sub(r"<@\1>", escaped(reason))
+
+
+def post_text(sender: str, recipient: str, reason: str, *, rendered: str = "") -> str:
     """Public channel post. Recognition IDs stay in private replies only."""
-    return f"<@{sender}> recognized <@{recipient}> · 🌟 +1\n{escaped(reason)}"
+    return f"<@{sender}> recognized <@{recipient}> · 🌟 +1\n{rendered or escaped(reason)}"
 
 
 def canceled_post_text(sender: str, recipient: str, reason: str) -> str:
     return f"Canceled · <@{sender}> → <@{recipient}>\n{escaped(reason)}"
+
+
+@dataclass(frozen=True)
+class GroupMember:
+    recipient: str
+    reason: str
+    canceled: bool
+
+
+def group_post_text(sender: str, members: Sequence[GroupMember]) -> str:
+    """One public post for every person recognised by one message."""
+    if len(members) == 1:
+        only = members[0]
+        if only.canceled:
+            return f"Canceled · <@{sender}> → <@{only.recipient}>\n{message_reason(only.reason)}"
+        return post_text(sender, only.recipient, only.reason, rendered=message_reason(only.reason))
+    lines = [
+        f"• ~<@{m.recipient}>~ canceled"
+        if m.canceled
+        else f"• <@{m.recipient}> · 🌟 +1 — {message_reason(m.reason)}"
+        for m in members
+    ]
+    return f"<@{sender}> recognized:\n" + "\n".join(lines)
