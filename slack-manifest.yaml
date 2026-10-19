@@ -10,7 +10,7 @@ features:
     - command: /karma-x
       url: https://REPLACE_WITH_YOUR_HOST/slack/commands
       description: Recognize a teammate and view karma.
-      usage_hint: "@person ++ reason | list-all | recognition view"
+      usage_hint: "@person ++ reason | list-all | recognition view | help"
       should_escape: true
 oauth_config:
   scopes:

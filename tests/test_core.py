@@ -82,3 +82,13 @@ def test_group_post_keeps_user_mentions_in_reasons_but_escapes_broadcasts():
         "U1", [GroupMember("U2", reason, False), GroupMember("U3", reason, False)]
     )
     assert "— Kudos to <@U2> and <@U3>" in both and "<!here>" not in both
+
+
+@pytest.mark.parametrize("text", ["help", "  help  ", "HELP"])
+def test_help_parser(text):
+    assert parse_command(text).action == "help"
+
+
+def test_unknown_command_points_to_help():
+    with pytest.raises(UserError, match="/karma-x help"):
+        parse_command("unknown")

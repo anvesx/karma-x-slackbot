@@ -31,6 +31,8 @@ def parse_command(text: str) -> Command:
         if not reason or len(reason) > 2000:
             raise UserError("Provide a reason of 1–2000 characters.")
         return Command("give", m[1], reason)
+    if text.lower() == "help":
+        return Command("help")
     if text == "list-all":
         return Command("list")
     if text in {"winner-of-the-day", "winner-of-the-month", "winner-of-the-year"}:
@@ -51,8 +53,22 @@ def parse_command(text: str) -> Command:
         return Command(m[1], m[2])
     raise UserError(
         "Use /karma-x @person ++ reason, list-all, winner-of-the-day/month/year, "
-        "winner-between YYYY-MM-DD YYYY-MM-DD, or recognition view/cancel <ID>."
+        "winner-between YYYY-MM-DD YYYY-MM-DD, or recognition view/cancel <ID>. "
+        "Try /karma-x help."
     )
+
+
+HELP_TEXT = """*karma-x* · one recognition, one karma
+*Give karma*
+• `/karma-x @person ++ reason`: +1 to one person, posted in this channel.
+• Or just thank people in a message or thread reply ("Huge kudos to @A and @B for…"). karma-x reads channels it was invited to and either gives +1 or privately asks you to *Award* or *Skip*. Slash commands don't work in threads, so this is how to give karma there.
+• Automatic karma goes to the same person at most once a day. Questions, requests, cc/fyi, and yourself never count.
+*See karma*
+• `/karma-x list-all`: top 30.
+• `/karma-x winner-of-the-day` (or `-month`, `-year`), `/karma-x winner-between YYYY-MM-DD YYYY-MM-DD`.
+• `/karma-x recognition view`: your recent recognitions.
+*Undo*
+• `/karma-x recognition cancel <ID>`: the ID is in the private reply you got when giving karma. Deleting your message also cancels its automatic karma."""
 
 
 def date_window(

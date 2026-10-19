@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 
 from karma_x.config import Config
 from karma_x.core import (
+    HELP_TEXT,
     Command,
     GroupMember,
     UserError,
@@ -117,6 +118,8 @@ class Service:
                 f"Canceled. <@{r['recipient']}> now has 🌟{self.store.total(team, r['recipient'])}."
             )
             return {"text": " ".join(filter(None, [canceled, self.delivery_note(r["id"])]))}
+        if c.action == "help":
+            return {"text": HELP_TEXT}
         if c.action == "list":
             return self.leaderboard(user)
         if c.action == "winner":
